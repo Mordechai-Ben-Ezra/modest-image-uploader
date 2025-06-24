@@ -3,12 +3,13 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import os, uuid, shutil
-from PIL import Image, ImageDraw
+import numpy as np
+from PIL import Image
 import mediapipe as mp
 
 app = FastAPI()
 
-# --- קבצים סטטיים ותבניות ---
+# הגדרות לתיקיות סטטיות ותבניות
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -17,47 +18,43 @@ RESULT_FOLDER = "static/results"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
-# ---------- פונקציית העיבוד החדשה ----------
 def make_image_modest(input_path: str, output_path: str) -> None:
     """
-    טוענת תמונה -> מזהה אדם -> מציירת כיסוי שחור-שקוף על אזור החזה
+    טוען תמונה -> מזהה פנים -> מצייר כיסוי שחור-שקוף על אזור החזה הרחבה כלפי מטה
     """
     # 1) טען תמונה
     img = Image.open(input_path).convert("RGB")
     w, h = img.size
 
-    # 2) מדיה־פייפ: גילוי אובייקט Person
-    mp_obj = mp.solutions.object_detection
-    detector = mp_obj.ObjectDetection(model_name="Person")  # מודל קטן
-    # MediaPipe מקבלת numpy, נשתמש בהמרה מהירה
-    results = detector.process(mp_obj.python_image_from_pil(img))
-    detector.close()
+    # 2) המרה ל-BGR numpy (דרוש ל-Mediapipe)
+    np_img = np.array(img)[:, :, ::-1]
 
-    # אם אין זיהוי – שמור כמו שהוא
+    # 3) זיהוי פנים עם Mediapipe FaceDetection
+    mp_fd = mp.solutions.face_detection
+    with mp_fd.FaceDetection(model_selection=1, min_detection_confidence=0.5) as detector:
+        results = detector.process(np_img)
+
+    # 4) אם לא זוהו פנים, שמור כמו שהייתי
     if not results.detections:
         img.save(output_path)
         return
 
-    # 3) תיבת האדם הראשונה
+    # 5) בחר תיבת הפנים הראשונה
     box = results.detections[0].location_data.relative_bounding_box
-    x0 = int(box.xmin * w)
-    y0 = int(box.ymin * h)
-    bw = int(box.width * w)
-    bh = int(box.height * h)
+    x0, y0 = int(box.xmin * w), int(box.ymin * h)
+    bw, bh = int(box.width * w), int(box.height * h)
+    # תחתון התיבה (y1) ואז הרחבה כלפי מטה ל-y2
+    y1 = y0 + bh
+    y2 = min(h, y1 + int(bh * 1.5))
 
-    # 4) חישוב אזור החזה (40 % מגובה התיבה העליונה)
-    y1 = y0
-    y2 = y0 + int(bh * 0.4)
-
-    # 5) יצירת כיסוי שחור-שקוף
+    # 6) צור כיסוי שחור-שקוף בגובה (y2-y1) וברוחב bw
     overlay = Image.new("RGBA", (bw, y2 - y1), (0, 0, 0, 180))
-    img = img.convert("RGBA")
-    img.paste(overlay, (x0, y1), overlay)
+    img_rgba = img.convert("RGBA")
+    img_rgba.paste(overlay, (x0, y1), overlay)
 
-    # 6) שמירה
-    img.convert("RGB").save(output_path)
+    # 7) שמור את התוצאה
+    img_rgba.convert("RGB").save(output_path)
 
-# ---------- ראוטים ----------
 @app.get("/", response_class=HTMLResponse)
 def form(request: Request):
     return templates.TemplateResponse("form.html", {"request": request})
@@ -77,6 +74,7 @@ async def upload(request: Request, file: UploadFile = File(...)):
     result_path = os.path.join(RESULT_FOLDER, result_filename)
     make_image_modest(upload_path, result_path)
 
+    # הצגת התוצאה בדף
     return templates.TemplateResponse(
         "result.html",
         {"request": request, "result_url": f"/static/results/{result_filename}"}
