@@ -5,85 +5,77 @@ from fastapi.templating import Jinja2Templates
 
 import os
 import uuid
+
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
+import cv2
 import mediapipe as mp
 
 app = FastAPI()
-# נתיבים ל־HTML ולסטטיים
+
+# תבניות וסטטיים
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# תיקיות לאחסון הקבצים
+# וודא שהתיקיות קיימות
 os.makedirs("static/uploads", exist_ok=True)
 os.makedirs("static/results", exist_ok=True)
+os.makedirs("static/overlays", exist_ok=True)
+
+# אתחול MediaPipe Selfie Segmentation
+mp_seg = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1)
 
 def make_image_modest(input_path: str, output_path: str):
-    # פותחים את התמונה ב־PIL
-    image = Image.open(input_path).convert("RGB")
-    draw = ImageDraw.Draw(image)
+    # טען תמונה
+    pil_img = Image.open(input_path).convert("RGB")
+    np_rgb = np.array(pil_img)
 
-    # ממירים ל־numpy RGB ול־BGR
-    np_rgb = np.array(image)
-    np_bgr = np_rgb[..., ::-1]
+    # הפעל סגמנטציה
+    results = mp_seg.process(cv2.cvtColor(np_rgb, cv2.COLOR_RGB2BGR))
 
-    # מאתחלים את המודלים
-    face_detector = mp.solutions.face_detection.FaceDetection(
-        model_selection=1, min_detection_confidence=0.5
+    # בנה מסכת בינארית (255 = אזור האדם)
+    mask = (results.segmentation_mask > 0.5).astype(np.uint8) * 255
+    mask_img = Image.fromarray(mask).convert("L").resize(pil_img.size)
+
+    # טען את ה-overlay של הבגד הצנוע
+    overlay = (
+        Image.open("static/overlays/modest_overlay.png")
+        .convert("RGBA")
+        .resize(pil_img.size)
     )
-    hand_detector = mp.solutions.hands.Hands(
-        static_image_mode=True,
-        max_num_hands=2,
-        min_detection_confidence=0.5
-    )
 
-    # מריצים גילוי פנים
-    faces = face_detector.process(np_bgr).detections or []
-    for face in faces:
-        bbox = face.location_data.relative_bounding_box
-        x1 = int(bbox.xmin * image.width)
-        y1 = int(bbox.ymin * image.height)
-        x2 = x1 + int(bbox.width * image.width)
-        y2 = y1 + int(bbox.height * image.height)
-        # מצניעים בריבוע שחור
-        draw.rectangle([x1, y1, x2, y2], fill="black")
+    # מיזוג: overlay איפה שה-mask לבן, אחרת התמונה המקורית
+    composed = Image.composite(overlay, pil_img.convert("RGBA"), mask_img)
 
-    # מריצים גילוי ידיים
-    hands = hand_detector.process(np_bgr).multi_hand_landmarks or []
-    for hand_landmarks in hands:
-        xs = [lm.x for lm in hand_landmarks.landmark]
-        ys = [lm.y for lm in hand_landmarks.landmark]
-        x1 = int(min(xs) * image.width)
-        y1 = int(min(ys) * image.height)
-        x2 = int(max(xs) * image.width)
-        y2 = int(max(ys) * image.height)
-        draw.rectangle([x1, y1, x2, y2], fill="black")
-
-    image.save(output_path)
+    # שמור חזרה
+    composed.convert("RGB").save(output_path)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("upload_form.html", {"request": request})
+    return templates.TemplateResponse("form.html", {"request": request})
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(request: Request, file: UploadFile = File(...)):
+    # הכנת שמות קבצים ייחודיים
     ext = os.path.splitext(file.filename)[1]
     file_id = f"{uuid.uuid4()}{ext}"
     in_path = os.path.join("static/uploads", file_id)
     out_path = os.path.join("static/results", file_id)
 
-    # שומרים את הקובץ
+    # שמירת הקובץ שהועלה
     with open(in_path, "wb") as buf:
         buf.write(await file.read())
 
-    # מצניעים
+    # עיבוד התמונה עם overlay
     make_image_modest(in_path, out_path)
 
+    # הצגת דף התוצאות
     return templates.TemplateResponse("result.html", {
         "request": request,
         "output_url": f"/static/results/{file_id}"
     })
 
+# (אופציונלי) אם תרצה לשלוף ישירות עם FileResponse
 @app.get("/static/results/{filename}")
 def results(filename: str):
     return FileResponse(os.path.join("static/results", filename), media_type="image/jpeg")
