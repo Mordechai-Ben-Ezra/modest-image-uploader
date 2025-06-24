@@ -2,5 +2,5 @@ fastapi
 uvicorn
 jinja2
 python-multipart
-pillow          # עיבוד תמונה בסיסי
-mediapipe       # זיהוי גוף
+pillow
+mediapipe>=0.10.14
