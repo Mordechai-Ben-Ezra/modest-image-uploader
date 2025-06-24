@@ -7,10 +7,14 @@
 <body style="text-align:center; font-family:sans-serif; padding:40px;">
   <h2>✅ התמונה עברה עיבוד</h2>
 
-  <img src="{{ result_url }}" alt="תמונה מעובדת" style="max-width:90%; height:auto; border:1px solid #ccc; padding:10px;">
-  
+  <!-- פה השתנו result_url → output_url -->
+  <img src="{{ output_url }}" alt="תמונה מעובדת"
+       style="max-width:90%; height:auto; border:1px solid #ccc; padding:10px;">
+
   <br><br>
-  <a href="{{ result_url }}" download>
+
+  <!-- קישור ההורדה גם מתאים ל־output_url -->
+  <a href="{{ output_url }}" download>
     <button style="padding:12px 24px;">📥 הורד את התמונה</button>
   </a>
 </body>
