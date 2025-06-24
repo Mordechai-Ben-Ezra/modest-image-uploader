@@ -4,5 +4,5 @@ jinja2
 pillow
 numpy
 mediapipe
-opencv-python
+opencv-python-headless
 python-multipart
