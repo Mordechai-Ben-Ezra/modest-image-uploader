@@ -56,26 +56,24 @@ def home(request: Request):
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(request: Request, file: UploadFile = File(...)):
-    # הכנת שמות קבצים ייחודיים
+    # שמירת הקובץ שהועלה
     ext = os.path.splitext(file.filename)[1]
     file_id = f"{uuid.uuid4()}{ext}"
-    in_path = os.path.join("static/uploads", file_id)
-    out_path = os.path.join("static/results", file_id)
+    in_path = f"static/uploads/{file_id}"
+    out_path = f"static/results/{file_id}"
 
-    # שמירת הקובץ שהועלה
     with open(in_path, "wb") as buf:
         buf.write(await file.read())
 
-    # עיבוד התמונה עם overlay
+    # עיבוד עם overlay
     make_image_modest(in_path, out_path)
 
-    # הצגת דף התוצאות
+    # הצגת דף תוצאות
     return templates.TemplateResponse("result.html", {
         "request": request,
         "output_url": f"/static/results/{file_id}"
     })
 
-# (אופציונלי) אם תרצה לשלוף ישירות עם FileResponse
 @app.get("/static/results/{filename}")
 def results(filename: str):
-    return FileResponse(os.path.join("static/results", filename), media_type="image/jpeg")
+    return FileResponse(f"static/results/{filename}", media_type="image/jpeg")
