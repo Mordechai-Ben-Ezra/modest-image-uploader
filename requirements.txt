@@ -1,6 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 jinja2
 pillow
 numpy
 mediapipe
+python-multipart
