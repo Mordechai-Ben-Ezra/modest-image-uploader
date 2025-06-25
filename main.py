@@ -2,6 +2,7 @@ from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware  # ← חדש
 
 import os
 import uuid
@@ -15,17 +16,25 @@ import mediapipe as mp
 
 app = FastAPI()
 
-# תבניות וסטטיים
+# --- CORS: מאפשר לתחום מקומי (file://) לקרוא את ה-JSON -------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       # פתוח לכל מקור; אפשר לצמצם בעתיד
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- תבניות וסטטיים --------------------------------------------------------
 templates = Jinja2Templates(directory="templates")
-app.mount("/static",  StaticFiles(directory="static"),  name="static")
+app.mount("/static",  StaticFiles(directory="static"),          name="static")
 app.mount("/results", StaticFiles(directory="static/results"), name="results")
 
-# וודא שהתיקיות קיימות
+# --- תיקיות חובה -----------------------------------------------------------
 os.makedirs("static/uploads",  exist_ok=True)
 os.makedirs("static/results",  exist_ok=True)
 os.makedirs("static/overlays", exist_ok=True)
 
-# אתחול MediaPipe Selfie Segmentation
+# --- Selfie Segmentation ----------------------------------------------------
 mp_seg = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=1)
 
 def make_image_modest(input_path: str, output_path: str):
@@ -37,19 +46,21 @@ def make_image_modest(input_path: str, output_path: str):
     mask = (results.segmentation_mask > 0.5).astype(np.uint8) * 255
     mask_img = Image.fromarray(mask).convert("L").resize(pil_img.size)
 
-    overlay = (Image.open("static/overlays/modest_overlay.png")
-               .convert("RGBA")
-               .resize(pil_img.size))
+    overlay = (
+        Image.open("static/overlays/modest_overlay.png")
+        .convert("RGBA")
+        .resize(pil_img.size)
+    )
 
     composed = Image.composite(overlay, pil_img.convert("RGBA"), mask_img)
     composed.convert("RGB").save(output_path)
 
-# ---------- עמוד הראשי --------------------------------------------------
+# ---------- עמוד הראשי ------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse("form.html", {"request": request})
 
-# ---------- העלאת תמונה -------------------------------------------------
+# ---------- העלאת תמונה -----------------------------------------------------
 @app.post("/upload", response_class=HTMLResponse)
 async def upload(request: Request, file: UploadFile = File(...)):
     ext      = os.path.splitext(file.filename)[1]
@@ -67,18 +78,16 @@ async def upload(request: Request, file: UploadFile = File(...)):
         "output_url": f"/static/results/{file_id}"
     })
 
-# ---------- חשיפת תוצאות תמונה ------------------------------------------
+# ---------- חשיפת תוצאות תמונה ---------------------------------------------
 @app.get("/static/results/{filename}")
-def results(filename: str):
+def results_image(filename: str):
     return FileResponse(f"static/results/{filename}", media_type="image/jpeg")
 
-# ---------- העלאת וידאו -------------------------------------------------
+# ---------- העלאת וידאו ------------------------------------------------------
 @app.post("/process_video")
-async def process_video(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
-):
-    # ‎1) שמירת קובץ הווידאו שהועלה
+async def process_video(background_tasks: BackgroundTasks,
+                        file: UploadFile = File(...)):
+    # 1) שמירת קובץ הווידאו
     vid_id  = uuid.uuid4().hex
     in_path  = f"static/uploads/{vid_id}.mp4"
     out_path = f"static/results/{vid_id}_modest.mp4"
@@ -86,10 +95,9 @@ async def process_video(
     with open(in_path, "wb") as f:
         f.write(await file.read())
 
-    # ‎2) הרצת העיבוד ברקע (לא חוסם את הבקשה)
+    # 2) עיבוד ברקע
     cmd = ["python", "video_modest_overlay.py", in_path, out_path]
     background_tasks.add_task(subprocess.run, cmd)
 
-    # ‎3) מחזירים URL; הלקוח יוכל להוריד כשהעיבוד יסתיים
-    dl_url = f"/results/{Path(out_path).name}"
-    return JSONResponse({"download_url": dl_url})
+    # 3) מחזירים URL להורדה
+    return JSONResponse({"download_url": f"/results/{Path(out_path).name}"})
